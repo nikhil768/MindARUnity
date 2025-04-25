@@ -1,13 +1,11 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
-
 using AOT;
 
 using UnityEngine;
 using UnityEngine.UI;
-
 using Unity.Mathematics;
 
 public class WebCamController : MonoBehaviour
@@ -44,61 +42,93 @@ public class WebCamController : MonoBehaviour
     public TMPro.TMP_Text qrCodes;
     public TMPro.TMP_Text[] names;
 
+    // 👇 Anchor to attach UI to tracked image
+    public GameObject imageTargetAnchor;
+
     void Start()
     {
-        WebCamDevice? chosenDevice = null;
+        WebCamDevice[] devices = WebCamTexture.devices;
+        WebCamDevice? rearCamera = null;
+        WebCamDevice? frontCamera = null;
 
-        // Try to find rear camera first
-        foreach (var device in WebCamTexture.devices)
+        foreach (var device in devices)
         {
-            if (!device.isFrontFacing)
-            {
-                chosenDevice = device;
-                break;
-            }
+            if (device.isFrontFacing)
+                frontCamera = device;
+            else
+                rearCamera = device;
         }
 
-        // Fallback to front camera if rear is not available
-        if (chosenDevice == null && WebCamTexture.devices.Length > 0)
-        {
-            chosenDevice = WebCamTexture.devices[0];
-            Debug.LogWarning("Rear camera not found. Using front-facing camera instead.");
-        }
+        WebCamDevice? chosenDevice = rearCamera ?? frontCamera;
 
-        if (chosenDevice != null)
+        if (chosenDevice.HasValue)
         {
             var texture = new WebCamTexture(chosenDevice.Value.name);
             image.texture = texture;
             texture.Play();
+
+            Debug.Log(rearCamera.HasValue && chosenDevice.Value.name == rearCamera.Value.name
+                ? "Rear camera found and selected."
+                : "Rear camera not found. Using front-facing camera instead.");
         }
         else
         {
             Debug.LogError("No camera available on this device.");
         }
+
+        if (imageTargetAnchor != null)
+            imageTargetAnchor.SetActive(false);
     }
 
     void Update()
     {
-        foreach (var group in UpdateQue.GroupBy((pair) => pair.index, (pair) => pair.matrix))
+        bool targetFound = false;
+
+        foreach (var group in UpdateQue.GroupBy(pair => pair.index, pair => pair.matrix))
         {
-            var floats = group.LastOrDefault((m) => m != null);
-            var nameText = names[group.Key];
-            nameText.gameObject.SetActive(floats != null);
-            if (floats == null)
-                continue;
+            var floats = group.LastOrDefault(m => m != null);
+            if (group.Key == 0 && floats != null)
+            {
+                targetFound = true;
 
-            var matrix = new Matrix4x4();
-            foreach (var i in Enumerable.Range(0, floats.Length))
-                matrix[i] = floats[i];
+                var matrix = new Matrix4x4();
+                for (int i = 0; i < floats.Length; i++)
+                    matrix[i] = floats[i];
 
-            nameText.transform.localRotation = matrix.rotation;
-            nameText.transform.localPosition = matrix.GetPosition() / 10;
+                // Update anchor position/rotation
+                if (imageTargetAnchor != null)
+                {
+                    imageTargetAnchor.SetActive(true);
+                    imageTargetAnchor.transform.localPosition = Vector3.Lerp(
+                        imageTargetAnchor.transform.localPosition,
+                        matrix.GetPosition() / 10f,
+                        Time.deltaTime * 10f
+                    );
+                    imageTargetAnchor.transform.localRotation = Quaternion.Slerp(
+                        imageTargetAnchor.transform.localRotation,
+                        matrix.rotation,
+                        Time.deltaTime * 10f
+                    );
+                }
 
-            nameText.text = nameText.name + "\n" + matrix.GetPosition();
+                // Optional name text positioning
+                if (names.Length > group.Key)
+                {
+                    var nameText = names[group.Key];
+                    nameText.gameObject.SetActive(true);
+                    nameText.transform.localPosition = matrix.GetPosition() / 10f;
+                    nameText.transform.localRotation = matrix.rotation;
+                    nameText.text = nameText.name + "\n" + matrix.GetPosition();
+                }
+            }
         }
 
+        if (!targetFound && imageTargetAnchor != null)
+            imageTargetAnchor.SetActive(false);
+
+        // Barcode display
         if (BarcodesQue.Count > 0)
-            qrCodes.text = string.Join("\n", BarcodesQue.Select((code) => code));
+            qrCodes.text = string.Join("\n", BarcodesQue.Select(code => code));
 
         BarcodesQue.Clear();
         UpdateQue.Clear();
@@ -107,9 +137,9 @@ public class WebCamController : MonoBehaviour
 #if UNITY_EDITOR
     static void SimulateAR()
     {
-        // Simulate a marker and barcode after 2 seconds
         UnityEditor.EditorApplication.delayCall += () =>
         {
+            // Simulate image tracking after 2 seconds
             UpdateQue.Add((0, new float[]
             {
                 1, 0, 0, 0,
@@ -118,7 +148,8 @@ public class WebCamController : MonoBehaviour
                 0, 0, 0, 1
             }));
 
-            BarcodesQue.Add("SIMULATED_BARCODE_001");
+            // Simulate QR code scan
+            BarcodesQue.Add("https://your-site.com");
         };
     }
 #endif
